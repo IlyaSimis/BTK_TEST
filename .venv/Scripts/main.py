@@ -91,8 +91,9 @@ class ConsensusGenerator:
             for pos, ref, alt, samples in chrom_variants:
                 if start <= pos < end:
                     sample_alleles = [s.split(':')[0] for s in samples if s]
+                    total_samples = 2 * len(sample_alleles)
                     if sample_alleles:
-                        allele_freq = sample_alleles.count('1') / 2*len(sample_alleles)
+                        allele_freq = sample_alleles.count('1') / total_samples
                         if allele_freq >= self.frequency_threshold:
                             consensus[pos - start] = alt
 
