@@ -32,7 +32,6 @@ class VCFParser:
                 if chrom not in self.variants:
                     self.variants[chrom] = []
                 self.variants[chrom].append((pos, ref, alt, samples))
-        # Сортировка вариантов по позиции
         for chrom in self.variants:
             self.variants[chrom].sort(key=lambda x: x[0])
         logging.info(f"Finished parsing and sorting VCF file: {self.vcf_file}")
@@ -106,7 +105,6 @@ class ConsensusGenerator:
         logging.info("Generating consensus sequences using multiprocessing")
         with Pool(cpu_count()) as pool:
             results = pool.map(self.generate_for_chromosome, self.reference.items())
-        # Объединение результатов
         consensus_sequences = [seq for sublist in results for seq in sublist]
         logging.info("Finished generating all consensus sequences")
         return consensus_sequences[:self.count]
