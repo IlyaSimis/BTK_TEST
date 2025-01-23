@@ -92,7 +92,7 @@ class ConsensusGenerator:
                 if start <= pos < end:
                     sample_alleles = [s.split(':')[0] for s in samples if s]
                     if sample_alleles:
-                        allele_freq = sample_alleles.count('1') / len(sample_alleles)
+                        allele_freq = sample_alleles.count('1') / 2*len(sample_alleles)
                         if allele_freq >= self.frequency_threshold:
                             consensus[pos - start] = alt
 
