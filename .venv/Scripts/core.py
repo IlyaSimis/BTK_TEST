@@ -80,8 +80,16 @@ class ConsensusGenerator:
         for chrom, vars in self.variants.items():
             seq = list(self.modified_reference[chrom])
             for pos, ref, alt in vars:
-                if seq[pos:pos + len(ref)] == list(ref):
+                # Логируем текущий участок последовательности
+                current_seq = seq[pos:pos + len(ref)]
+                logger.debug(
+                    f"Chromosome {chrom}, Position {pos}: Current sequence: {''.join(current_seq)}, Expected ref: {ref}")
+                if current_seq == list(ref):
                     seq[pos:pos + len(ref)] = list(alt)
+                    logger.debug(f"Chromosome {chrom}, Position {pos}: Modified to alt: {alt}")
+                else:
+                    logger.warning(
+                        f"Chromosome {chrom}, Position {pos}: Sequence mismatch. Expected: {ref}, Found: {''.join(current_seq)}")
             self.modified_reference[chrom] = ''.join(seq)
             logger.info(f"Variants applied to chromosome {chrom}")
 
