@@ -27,30 +27,29 @@ class ConsensusGenerator:
         self.total_consensus = total_consensus
         self.random_start = random_start
         self.sample_name = sample_name
-        self.reference = None
-        self.modified_reference = None
-        self.variants = None
+        self.chrom_lengths = {}
+        self.variants = {}
 
     @log_exceptions
-    def load_fasta(self):
-        reference = {}
-        current_chrom = None
+    def parse_reference_lengths(self):
         with open(self.reference_path, 'r') as file:
+            current_chrom, current_length = None, 0
             for line in file:
                 if line.startswith('>'):
+                    if current_chrom:
+                        self.chrom_lengths[current_chrom] = current_length
                     current_chrom = line.strip()[1:]
-                    reference[current_chrom] = []
-                elif current_chrom:
-                    reference[current_chrom].append(line.strip())
-        self.reference = {chrom: ''.join(seq) for chrom, seq in reference.items()}
-        for chrom, seq in self.reference.items():
-            logger.info(f"Loaded chromosome {chrom}: {len(seq)} bp")
+                    current_length = 0
+                else:
+                    current_length += len(line.strip())
+            if current_chrom:
+                self.chrom_lengths[current_chrom] = current_length
+        logger.info(f"Parsed chromosome lengths: {self.chrom_lengths}")
 
     @log_exceptions
     def parse_vcf(self):
-        variants = {}
-        sample_index = None
         with open(self.vcf_path, 'r') as file:
+            sample_index = None
             for line in file:
                 if line.startswith("#CHROM"):
                     headers = line.strip().split('\t')
@@ -60,53 +59,27 @@ class ConsensusGenerator:
                         raise ValueError(f"Sample '{self.sample_name}' not found in VCF headers.")
                 elif not line.startswith('#'):
                     fields = line.strip().split('\t')
-                    chrom = fields[0]
-                    pos = int(fields[1]) - 1
-                    ref = fields[3]
-                    alt = fields[4]
-                    if sample_index is not None:
-                        genotype = fields[sample_index].split(':')[0]
-                        if "1" in genotype:
-                            if chrom not in variants:
-                                variants[chrom] = []
-                            variants[chrom].append((pos, ref, alt))
-        self.variants = variants
-        for chrom, vars in self.variants.items():
-            logger.info(f"Parsed {len(vars)} variants for chromosome {chrom} for sample {self.sample_name}")
-
-    @log_exceptions
-    def apply_variants(self):
-        self.modified_reference = self.reference.copy()
-        for chrom, vars in self.variants.items():
-            seq = list(self.modified_reference[chrom])
-            for pos, ref, alt in vars:
-                # Логируем текущий участок последовательности
-                current_seq = seq[pos:pos + len(ref)]
-                logger.debug(
-                    f"Chromosome {chrom}, Position {pos}: Current sequence: {''.join(current_seq)}, Expected ref: {ref}")
-                if current_seq == list(ref):
-                    seq[pos:pos + len(ref)] = list(alt)
-                    logger.debug(f"Chromosome {chrom}, Position {pos}: Modified to alt: {alt}")
-                else:
-                    logger.warning(
-                        f"Chromosome {chrom}, Position {pos}: Sequence mismatch. Expected: {ref}, Found: {''.join(current_seq)}")
-            self.modified_reference[chrom] = ''.join(seq)
-            logger.info(f"Variants applied to chromosome {chrom}")
+                    chrom, pos, ref, alt = fields[0], int(fields[1]) - 1, fields[3], fields[4]
+                    genotype = fields[sample_index].split(':')[0] if sample_index else None
+                    if "1" in genotype:
+                        self.variants.setdefault(chrom, []).append((pos, ref, alt))
+        logger.info(f"Parsed variants for sample {self.sample_name}")
 
     @log_exceptions
     def generate_start_positions(self):
-        chrom_lengths = {chrom: len(seq) for chrom, seq in self.modified_reference.items()}
         all_positions = []
-        for chrom, length in chrom_lengths.items():
-            max_start = length - self.length_consensus + 1
+        for chrom, length in self.chrom_lengths.items():
+            max_start = max(0, length - self.length_consensus + 1)
             if max_start <= 0:
                 logger.warning(f"Consensus length {self.length_consensus} exceeds chromosome {chrom} length {length}. Skipping...")
                 continue
+
             if self.random_start:
-                chrom_positions = random.sample(range(0, max_start), min(self.total_consensus, max_start))
+                positions = random.sample(range(max_start), min(self.total_consensus, max_start))
             else:
-                chrom_positions = list(range(0, max_start, self.length_consensus))[:self.total_consensus]
-            all_positions.extend([(chrom, pos) for pos in chrom_positions])
+                positions = list(range(0, max_start, self.length_consensus))[:self.total_consensus]
+            all_positions.extend([(chrom, pos) for pos in positions])
+
         if len(all_positions) > self.total_consensus:
             all_positions = random.sample(all_positions, self.total_consensus)
         logger.info(f"Generated start positions: {all_positions}")
@@ -115,36 +88,64 @@ class ConsensusGenerator:
     @log_exceptions
     def create_consensus_sequences(self, start_positions):
         consensus_sequences = {}
-        for i, (chrom, start) in enumerate(start_positions):
-            original_seq = self.reference[chrom][start:start + self.length_consensus]
-            modified_seq = self.modified_reference[chrom][start:start + self.length_consensus]
+        chrom_sequences = self._load_reference_sequences()
+
+        for chrom, start in start_positions:
+            original_seq = chrom_sequences[chrom][start:start + self.length_consensus]
+            modified_seq = self.apply_variants_to_sequence(chrom, start, original_seq)
             change_label = "MODIFIED" if original_seq != modified_seq else "UNMODIFIED"
-            start_seq = start + 1
-            end_seq = start + self.length_consensus
-            header = f"{self.sample_name}_{chrom}_Chunk_{i+1}_({start_seq}-{end_seq})_{change_label}"
+            header = f"{self.sample_name}_{chrom}_Chunk_{start + 1}-{start + self.length_consensus}_{change_label}"
             consensus_sequences[header] = modified_seq
-            logger.info(f"Created consensus sequence for {header}: {modified_seq}")
+
+        logger.info(f"Created {len(consensus_sequences)} consensus sequences")
         return consensus_sequences
+
+    def _load_reference_sequences(self):
+        sequences = {}
+        with open(self.reference_path, 'r') as file:
+            current_chrom, current_seq = None, []
+            for line in file:
+                if line.startswith('>'):
+                    if current_chrom:
+                        sequences[current_chrom] = ''.join(current_seq)
+                    current_chrom = line.strip()[1:]
+                    current_seq = []
+                else:
+                    current_seq.append(line.strip())
+            if current_chrom:
+                sequences[current_chrom] = ''.join(current_seq)
+        return sequences
+
+    def apply_variants_to_sequence(self, chrom, start, sequence):
+        if chrom not in self.variants:
+            return sequence
+
+        seq = list(sequence)
+        for pos, ref, alt in self.variants[chrom]:
+            if start <= pos < start + len(sequence):
+                local_pos = pos - start
+                if seq[local_pos:local_pos + len(ref)] == list(ref):
+                    seq[local_pos:local_pos + len(ref)] = list(alt)
+                else:
+                    logger.warning(f"Variant mismatch at {chrom}:{pos + 1}. Skipping variant.")
+        return ''.join(seq)
 
     @log_exceptions
     def write_fasta(self, sequences):
         with open(self.output_path, 'w') as fasta:
             for header, seq in sequences.items():
-                fasta.write(f">{header}\n")
-                fasta.write(f"{seq}\n")
+                fasta.write(f">{header}\n{seq}\n")
         logger.info(f"FASTA written to {self.output_path}")
 
     @log_exceptions
     def run(self):
         start_time = time.time()
-        self.load_fasta()
+        self.parse_reference_lengths()
         self.parse_vcf()
-        self.apply_variants()
         start_positions = self.generate_start_positions()
         consensus_sequences = self.create_consensus_sequences(start_positions)
         self.write_fasta(consensus_sequences)
-        elapsed_time = time.time() - start_time
-        logger.info(f"Total execution time: {elapsed_time:.2f} seconds")
+        logger.info(f"Total execution time: {time.time() - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate consensus FASTA from VCF and reference genome.")
@@ -158,8 +159,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    process = multiprocessing.Process(target=ConsensusGenerator(
+    generator = ConsensusGenerator(
         args.reference, args.vcf, args.output, args.length, args.total, args.random, args.sample
-    ).run)
-    process.start()
-    process.join()
+    )
+    generator.run()
