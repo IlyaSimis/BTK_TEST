@@ -1,6 +1,5 @@
 import random
 import logging
-import multiprocessing
 import argparse
 import time
 from functools import wraps
@@ -55,14 +54,17 @@ class ConsensusGenerator:
                     headers = line.strip().split('\t')
                     if self.sample_name in headers:
                         sample_index = headers.index(self.sample_name)
+                        logger.info(f"Found sample '{self.sample_name}' at index {sample_index}")
                     else:
                         raise ValueError(f"Sample '{self.sample_name}' not found in VCF headers.")
-                elif not line.startswith('#'):
+                elif not line.startswith('#') and sample_index is not None:
                     fields = line.strip().split('\t')
                     chrom, pos, ref, alt = fields[0], int(fields[1]) - 1, fields[3], fields[4]
-                    genotype = fields[sample_index].split(':')[0] if sample_index else None
+                    genotype = fields[sample_index].split(':')[0]
                     if "1" in genotype:
                         self.variants.setdefault(chrom, []).append((pos, ref, alt))
+        if sample_index is None:
+            raise ValueError(f"Sample '{self.sample_name}' not found in the VCF file.")
         logger.info(f"Parsed variants for sample {self.sample_name}")
 
     @log_exceptions
@@ -163,3 +165,4 @@ if __name__ == "__main__":
         args.reference, args.vcf, args.output, args.length, args.total, args.random, args.sample
     )
     generator.run()
+
