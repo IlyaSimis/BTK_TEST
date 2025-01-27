@@ -54,7 +54,7 @@ class ConsensusGenerator:
                     headers = line.strip().split('\t')
                     if self.sample_name in headers:
                         sample_index = headers.index(self.sample_name)
-                        logger.info(f"Found sample '{self.sample_name}' at index {sample_index}")
+                        logger.info(f"Found sample '{self.sample_name}' at index {sample_index+1}")
                     else:
                         raise ValueError(f"Sample '{self.sample_name}' not found in VCF headers.")
                 elif not line.startswith('#') and sample_index is not None:
